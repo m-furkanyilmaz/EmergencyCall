@@ -1,15 +1,27 @@
+const webPush = require("web-push");
 const express = require('express');
 const app = express();
-
+const path = require("path");
 const cors = require("cors");
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
 const http = require('http');
+
 const socketIo = require('socket.io');
 const server = http.createServer(app);
 
 const PORT = process.env.PORT || 4000;
+
+const vapidVeys = webPush.generateVAPIDKeys();
+const publicVapidKey = vapidVeys.publicKey;
+
+let subscriptions = [];
+
+webPush.setVapidDetails(
+'mailto:furkankdh@outlook.com',
+vapidVeys.publicKey,
+vapidVeys.privateKey
+);
+
+app.use(express.json());
 
 const io = socketIo(server,{
   cors:{
@@ -18,13 +30,28 @@ const io = socketIo(server,{
   }
 });
 
-
 app.use(cors({
   origin:"*",
   methods:["GET","POST"],
   allowedHeaders:['Content-Type'],
 }));
 
+// app.get('*', (req, res) => {
+//   res.sendFile(path.join(__dirname, 'build', 'index.html'));
+// });
+
+app.get('/vapid-public-key',(req,res)=>{
+  res.json({publicVapidKey});
+});
+
+app.post('/subscribe', (req, res) => {
+  const subscription = req.body;
+  
+  // Geçici bellekte (dizi) abonelik ekleyin
+  subscriptions.push(subscription);
+  
+  res.status(200).json({ message: 'Subscribed successfully!' });
+});
 
 io.on('connection', (socket) => {
   console.log('Yeni bir cihaz bağlandı');
@@ -37,6 +64,29 @@ io.on('connection', (socket) => {
     io.emit('notification', color );
   });
 
+  socket.on('subscribe', (subscription) => {
+    subscriptions.push(subscription);
+    console.log('User subscribed:', subscription.endpoint);
+  });
+
+  socket.on('sendNotification',(color) =>{
+    subscriptions.forEach((subscription) => {
+      console.log("RENK BİLGİSİ:",color);
+    const payload = JSON.stringify({
+      title: 'Yeni Bildirim',
+      body: "color",
+    });
+    webPush.sendNotification(subscription,payload)
+  .then(response=> {
+    console.log('Push notification sent:',response);
+  })
+  .catch(error => {
+    console.log('Error sending push notification',error);
+  });
+    });
+});
+  
+  app.use(express.static(path.join(__dirname,"build")));
 
 app.get('/', (req, res) => {
   res.send('Socket.IO Sunucu Çalışıyor');
@@ -53,7 +103,6 @@ app.post('/buttonClick', (req, res) => {
   // Backend'in başarılı bir şekilde veri aldığını bildiren yanıt
   res.json({ status: 'success', message: `Renk ${color} başarıyla alındı!` });
 });
-
 
   // Bağlantı sonlandığında
   socket.on('disconnect', () => {

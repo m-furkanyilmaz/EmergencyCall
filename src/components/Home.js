@@ -6,7 +6,13 @@ import axios from 'axios';
 import "../css/home.css";
 import io from "socket.io-client";
 
-const socket = io("http://10.141.20.6:4000");
+
+
+// const SOCKET_SERVER_URL = process.env.REACT_APP_SOCKET_SERVER_URL || 'http://10.41.32.90:4000';
+
+const SOCKET_SERVER_URL = process.env.REACT_APP_SOCKET_SERVER_URL || 'http://10.141.20.6:4000';
+
+const socket = io(SOCKET_SERVER_URL);
 
 function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -16,16 +22,20 @@ function Home() {
   const [buttonBgColor, setButtonBgColor] = useState('white');
   const [notification, setNotification] = useState("");
   const [audio] = useState(new Audio("/alarmclock.mp3"));
+  const [publicVapidKey, setPublicVapidKey] = useState(null);
+  const [subscription, setSubscription] = useState(null);
 
 
   const openModal = async (event,color) => {
-
     setButtonBgColor(color.value);
     setClickedButton(color.label);
     setIsModalOpen(true); 
     color = [color.label,unitValue,color.value];
     console.log(unitValue,color);
     try {
+      // const response = await axios.post(`http://10.41.32.90:4000/buttonClick`,{
+      //   color:color,
+      // });
       const response = await axios.post(`http://10.141.20.6:4000/buttonClick`,{
         color:color,
       });
@@ -35,18 +45,70 @@ function Home() {
     }
 
     socket.emit('buttonClick',color);
+    if(subscription){
+      socket.emit('sendNotification',subscription,color);
+    }
   };
 
-  // useEffect(()=>{
-  //   const getNotification = async () => {
-  //     await axios
-  //     .get("http://localhost:4000")
-  //     .then(function (response) {
-  //         console.log(response);
-  //     })
-  //   }
-  //   getNotification();
-  // })
+  useEffect(()=>{
+
+    fetch('http://10.141.20.6:4000/vapid-public-key')
+    .then((response) => response.json())
+    .then((dataVapid) => {
+      setPublicVapidKey(dataVapid.publicVapidKey);
+    })
+    .catch((error) => {
+      console.error('Public VAPID Key alınamadı:',error);
+    });
+    subscribeUser();
+  },[]);
+
+  const subscribeUser = async () => {
+      if ('serviceWorker' in navigator) {
+      //  navigator.serviceWorker.ready.then(function (registration) {
+      //   // Push bildirimlerine abone olma
+      //   registration.pushManager.subscribe({
+      //     userVisibleOnly: true,
+      //     applicationServerKey: urlBase64ToUint8Array(publicVapidKey), 
+      //   }).then(function (sub) {
+      //     console.log('User subscribed to push notifications:', sub);
+      //     setSubscription(sub);
+      //     // Sunucuya abone bilgilerini gönderme
+      //     socket.emit('subscribe', sub);
+      //   }).catch(function (error) {
+      //     console.error('Push subscription failed:', error);
+      //   });
+      // });
+      try {
+        const permission = await Notification.requestPermission();
+        if (permission === 'granted') {
+          const registration = await navigator.serviceWorker.register('service-worker.js');
+
+          // Push Manager ile abone olma
+          console.log(publicVapidKey);
+          const subscription = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicVapidKey),
+          });
+
+          // Backend'e abone bilgilerini gönder
+          await fetch('http://10.141.20.6:4000/subscribe', {
+            method: 'POST',
+            body: JSON.stringify(subscription),
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          });
+
+          setSubscription(subscription);
+          console.log('User subscribed:', subscription);
+        }
+      } catch (err) {
+        console.error('Error during subscription:', err);
+      }
+    }
+  }
+
 
   useEffect(()=>{
     socket.on('notification',(data) => {
@@ -58,12 +120,25 @@ function Home() {
       setButtonBgColor(data[2]);
       setIsModalOpen(true);
 
+      // Sunucudan gelen bildirimleri al
+    socket.on('sendNotification', (message) => {
+      console.log('New Notification:', message);
+      // Tarayıcıda bildirim gösterme
+      if (Notification.permission === 'granted') {
+        new Notification('Yeni Bildirim', {
+          body: message,
+          // icon: icon,
+        });
+      }
+    });
+
       audio.loop = true;
       audio.play();
     });
 
     return () => {
       socket.off('notification');
+      socket.off('sendNotification');
     };
   },[audio]);
 
@@ -72,8 +147,19 @@ function Home() {
     setIsModalOpen(false);
   };
 
-
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/\\-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  }
+ 
   return (
+    <>
     <div className='container my-5'>
       <h1 className='text-center' style={{ marginBottom:"40px"}}>BULUNDUĞUNUZ BİRİMİ SEÇİN</h1>
        <Select
@@ -130,6 +216,7 @@ function Home() {
         </div>
       )}
     </div>
+    </>
   )
 }
 
